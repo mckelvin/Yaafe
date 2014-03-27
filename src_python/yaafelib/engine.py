@@ -22,6 +22,7 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+import os
 from ctypes import c_int, pointer
 
 from yaafelib.core import yaafecore as yc
@@ -38,6 +39,8 @@ class Engine(object):
             :options: +ELLIPSIS, +NORMALIZE_WHITESPACE
 
             >>> # Initialization
+            >>> import sys
+            >>> import pickle
             >>> fp = FeaturePlan(sample_rate=16000)
             >>> fp.addFeature('mfcc: MFCC blockSize=512 stepSize=256')
             True
@@ -56,6 +59,7 @@ class Engine(object):
             >>> engine = Engine()
             >>> engine.load(df)
             True
+            >>> engine2 = pickle.loads(pickle.dumps(engine))
             >>> # get input metadata
             >>> eng_out = engine.getInputs()
             >>> sorted(eng_out.keys())
@@ -80,15 +84,19 @@ class Engine(object):
              ('version', '0.64'),
              ('yaafedefinition', 'SpectralRolloff blockSize=512 stepSize=256')]
             >>> # extract features from a numpy array
-            >>> import numpy # needs numpy
-            >>> audio = numpy.random.randn(1,1000000)
+            >>> import numpy as np  # needs numpy
+            >>> audio = np.random.randn(1,1000000)
             >>> feats = engine.processAudio(audio)
+            >>> feats2 = engine2.processAudio(audio)
             >>> feats['mfcc']
             array([[...]])
             >>> feats['sf']
             array([[...]])
             >>> feats['sr']
             array([[...]])
+            >>> fdiff = feats['mfcc'] - feats2['mfcc']
+            >>> np.abs(fdiff).max() < sys.float_info.epsilon
+            True
 
         It is also possible to extract features block per block:
 
@@ -127,25 +135,42 @@ class Engine(object):
 
 
     """
+    DATAFLOW_KEY = '__dataflow_string'
+
     def __init__(self):
         self.ptr = yc.engine_create()
 
     def __del__(self):
         yc.engine_destroy(self.ptr)
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        del state['ptr']
+        return state
+
+    def __setstate__(self, state):
+        self.__init__()
+        dataflow_str = state.get(self.DATAFLOW_KEY)
+        if dataflow_str is not None:
+            self.load(dataflow_str)
+
     def load(self, dataflow):
         """
             Configure engine according to the given dataflow.
 
-            :param dataflow: dataflow object or filename of a dataflow file.
+            :param dataflow: dataflow object or filename of a dataflow file
+                             or buffer read from a dataflow file.
             :type dataflow: :py:class:`DataFlow` or string
             :return: True on success, False on fail.
         """
         if type(dataflow) is str:
             df = DataFlow()
-            if df.load(dataflow):
+            if os.path.exists(dataflow) and df.load(dataflow):
+                dataflow = df
+            elif df.loads(dataflow):
                 dataflow = df
         if type(dataflow) is DataFlow:
+            self.__dict__[self.DATAFLOW_KEY] = str(dataflow)
             return yc.engine_load(self.ptr, dataflow.ptr) and True or False
         raise TypeError('dataflow parameter must be a DataFlow object or '
                         'dataflow filename !')
